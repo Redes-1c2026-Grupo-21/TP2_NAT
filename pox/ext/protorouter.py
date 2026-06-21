@@ -56,7 +56,7 @@ class ProtoRouter(object):
         in_port = event.port
 
         log_color(
-            YELLOW, f"RECIBIDO: {ip_pkt.srcip} → {ip_pkt.dstip} | "
+            YELLOW, f"RECIBIDO IP: {ip_pkt.srcip} → {ip_pkt.dstip} | "
             f"MAC: {packet.src} → {packet.dst} | In Port: {in_port}")
 
         if ip_pkt.srcip.inNetwork(PRIVATE_SUBNET, PRIVATE_MASK):
@@ -106,6 +106,32 @@ class ProtoRouter(object):
         else:
             log_color(RED, f"NO MATCH: {ip_pkt.srcip} no pertenece a {PRIVATE_SUBNET}/{PRIVATE_MASK}")
 
+
+    def send_arp_reply(self, request, out_port, MAC_ADRESS, IP_ADDRESS):
+        
+        a = arp()
+        a.opcode = arp.REPLY
+
+        # El router responde
+        a.hwsrc = MAC_ADRESS
+        a.protosrc = IP_ADDRESS
+
+        # Datos del host que hizo el request
+        a.hwdst = request.hwsrc
+        a.protodst = request.protosrc
+
+        e = ethernet()
+        e.type = ethernet.ARP_TYPE
+        e.src = MAC_ADRESS
+        e.dst = request.hwsrc
+        e.payload = a
+
+        msg = of.ofp_packet_out()
+        msg.data = e.pack()
+        msg.actions.append(of.ofp_action_output(port=out_port))
+
+        self.connection.send(msg)
+
     def send_arp_request(self, ip):
 
         a = arp()
@@ -141,6 +167,17 @@ class ProtoRouter(object):
         self.arp_table[arp_pkt.protosrc] = arp_pkt.hwsrc
     
         if arp_pkt.opcode == arp.REQUEST:
+
+            if arp_pkt.protodst == PRIVATE_IP:
+                self.send_arp_reply(arp_pkt, in_port, PRIVATE_MAC, PRIVATE_IP)
+
+                return
+            
+            if arp_pkt.protodst == PUBLIC_IP:
+                self.send_arp_reply(arp_pkt, in_port, PUBLIC_MAC, PUBLIC_IP)
+
+                return
+
             if arp_pkt.protodst not in self.arp_table:
                 self.send_arp_request(arp_pkt.protodst)
 
