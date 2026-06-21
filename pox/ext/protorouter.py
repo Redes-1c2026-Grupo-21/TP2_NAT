@@ -2,7 +2,9 @@
 from pox.core import core                       # Main POX object
 import pox.openflow.libopenflow_01 as of        # OpenFlow 1.0 library
 from pox.lib.addresses import EthAddr, IPAddr   # Address types
-from pox.lib.packet.ethernet import ethernet
+from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
+
+from pox.lib.packet.arp import arp
 
 log = core.getLogger()
 RED = "\033[31m"
@@ -24,13 +26,15 @@ PUBLIC_MAC = EthAddr("00:00:00:aa:aa:aa")   # MAC del router hacia la red públi
 PRIVATE_MAC = EthAddr("00:00:00:bb:bb:bb")  # MAC del router hacia la red privada
 PUBLIC_PORT = 1                             # Puerto del switch conectado a la red pública
 
-H1_MAC = EthAddr("00:00:00:00:00:01")       # MAC del host externo (TODO: resolver mediante ARP)
+#H1_MAC = EthAddr("00:00:00:00:00:01")       # MAC del host externo (TODO: resolver mediante ARP)
 
 
 class ProtoRouter(object):
     def __init__(self, connection):
         self.connection = connection
         connection.addListeners(self)
+
+        self.arp_table = {}
 
     def _handle_PacketIn(self, event):
         if not event.parsed.parsed:
@@ -39,8 +43,12 @@ class ProtoRouter(object):
 
         if event.parsed.type == ethernet.IP_TYPE:
             self.handle_ip(event)
+
+        if event.parsed.type == ethernet.ARP_TYPE:
+            self.handle_arp(event)
+        
         else:
-            log_color(YELLOW, f"Paquete ignorado: protocolo distinto de IPv4.")
+            log_color(YELLOW, f"Paquete ignorado: protocolo distinto de IPv4 y ARP.")
 
     def handle_ip(self, event):
         packet = event.parsed
@@ -66,7 +74,7 @@ class ProtoRouter(object):
 
             # Acción (Saliente)
             fm.actions.append(of.ofp_action_dl_addr.set_src(PUBLIC_MAC))
-            fm.actions.append(of.ofp_action_dl_addr.set_dst(H1_MAC))
+            fm.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table.get(ip_pkt.dstip)))
             fm.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
             self.connection.send(fm)
 
@@ -88,15 +96,53 @@ class ProtoRouter(object):
 
             # Reenviar paquete actual con MACs actualizadas (Los posteriores pasan por flujo)
             packet.src = PUBLIC_MAC
-            packet.dst = H1_MAC
+            packet.dst = self.arp_table.get(ip_pkt.dstip) 
             msg = of.ofp_packet_out()
             msg.data = packet.pack()
             msg.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
-            log_color(CYAN, f"ENVIANDO: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {H1_MAC} | Out Port: {PUBLIC_PORT}")
+            log_color(CYAN, f"ENVIANDO: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {self.arp_table.get(ip_pkt.dstip)} | Out Port: {PUBLIC_PORT}")
             self.connection.send(msg)
 
         else:
             log_color(RED, f"NO MATCH: {ip_pkt.srcip} no pertenece a {PRIVATE_SUBNET}/{PRIVATE_MASK}")
+
+    def send_arp_request(self, ip):
+
+        a = arp()
+        a.opcode = arp.REQUEST
+        a.hwsrc = PUBLIC_MAC
+        a.protosrc = PUBLIC_IP
+        a.hwdst = EthAddr("00:00:00:00:00:00")
+        a.protodst = ip
+
+        e = ethernet()
+        e.type = ethernet.ARP_TYPE
+        e.src = PUBLIC_MAC
+        e.dst = ETHER_BROADCAST
+        e.payload = a
+
+        msg = of.ofp_packet_out()
+        msg.data = e.pack()
+        msg.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
+
+        log_color(CYAN, f"ENVIANDO ARP REQUEST: {PUBLIC_IP} ({PUBLIC_MAC}) → {ip} (Broadcast) | Out Port: {PUBLIC_PORT}")
+
+        self.connection.send(msg)
+
+    def handle_arp(self, event):
+        packet = event.parsed
+        arp_pkt = packet.payload
+        in_port = event.port
+
+        log_color(
+            YELLOW, f"RECIBIDO ARP: {arp_pkt.opcode} | "
+            f"{arp_pkt.protosrc} ({arp_pkt.hwsrc}) → {arp_pkt.protodst} ({arp_pkt.hwdst}) | In Port: {in_port}")
+
+        self.arp_table[arp_pkt.protosrc] = arp_pkt.hwsrc
+    
+        if arp_pkt.opcode == arp.REQUEST:
+            if arp_pkt.protodst not in self.arp_table:
+                self.send_arp_request(arp_pkt.protodst)
 
 
 def launch():
