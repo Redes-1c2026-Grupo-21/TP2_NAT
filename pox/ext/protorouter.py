@@ -44,7 +44,7 @@ class ProtoRouter(object):
         if event.parsed.type == ethernet.IP_TYPE:
             self.handle_ip(event)
 
-        if event.parsed.type == ethernet.ARP_TYPE:
+        elif event.parsed.type == ethernet.ARP_TYPE:
             self.handle_arp(event)
         
         else:
@@ -63,6 +63,12 @@ class ProtoRouter(object):
 
             log_color(GREEN, f"MATCH: {ip_pkt.srcip} pertenece a la red privada {PRIVATE_SUBNET}/{PRIVATE_MASK}")
 
+            dst_mac = self.arp_table.get(ip_pkt.dstip)
+            if dst_mac is None:
+                log_color(YELLOW, f"MAC desconocido para {ip_pkt.dstip}: enviando ARP request y esperando respuesta.")
+                self.send_arp_request(ip_pkt.dstip)
+                return
+
             # Instalar Flujo Saliente
             fm = of.ofp_flow_mod()
             fm.idle_timeout = 10
@@ -74,7 +80,7 @@ class ProtoRouter(object):
 
             # Acción (Saliente)
             fm.actions.append(of.ofp_action_dl_addr.set_src(PUBLIC_MAC))
-            fm.actions.append(of.ofp_action_dl_addr.set_dst(self.arp_table.get(ip_pkt.dstip)))
+            fm.actions.append(of.ofp_action_dl_addr.set_dst(dst_mac))
             fm.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
             self.connection.send(fm)
 
@@ -96,11 +102,11 @@ class ProtoRouter(object):
 
             # Reenviar paquete actual con MACs actualizadas (Los posteriores pasan por flujo)
             packet.src = PUBLIC_MAC
-            packet.dst = self.arp_table.get(ip_pkt.dstip) 
+            packet.dst = dst_mac
             msg = of.ofp_packet_out()
             msg.data = packet.pack()
             msg.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
-            log_color(CYAN, f"ENVIANDO: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {self.arp_table.get(ip_pkt.dstip)} | Out Port: {PUBLIC_PORT}")
+            log_color(CYAN, f"ENVIANDO: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {dst_mac} | Out Port: {PUBLIC_PORT}")
             self.connection.send(msg)
 
         else:
@@ -178,8 +184,7 @@ class ProtoRouter(object):
 
                 return
 
-            if arp_pkt.protodst not in self.arp_table:
-                self.send_arp_request(arp_pkt.protodst)
+            log_color(YELLOW, f"ARP request para {arp_pkt.protodst} no es para el router; ignorado.")
 
 
 def launch():
