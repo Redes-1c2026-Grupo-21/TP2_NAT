@@ -26,8 +26,6 @@ PUBLIC_MAC = EthAddr("00:00:00:aa:aa:aa")   # MAC del router hacia la red públi
 PRIVATE_MAC = EthAddr("00:00:00:bb:bb:bb")  # MAC del router hacia la red privada
 PUBLIC_PORT = 1                             # Puerto del switch conectado a la red pública
 
-#H1_MAC = EthAddr("00:00:00:00:00:01")       # MAC del host externo (TODO: resolver mediante ARP)
-
 
 class ProtoRouter(object):
     def __init__(self, connection):
@@ -49,7 +47,7 @@ class ProtoRouter(object):
 
         elif event.parsed.type == ethernet.ARP_TYPE:
             self.handle_arp(event)
-        
+
         else:
             log_color(YELLOW, f"Paquete ignorado: protocolo distinto de IPv4 y ARP.")
 
@@ -69,7 +67,8 @@ class ProtoRouter(object):
             dst_mac = self.arp_table.get(ip_pkt.dstip)
             if dst_mac is None:
                 log_color(YELLOW, f"MAC desconocido para {ip_pkt.dstip}: enviando ARP request y esperando respuesta.")
-                self.send_arp_request(ip_pkt.dstip)
+                # FIX: resolvemos el destino PÚBLICO, con la identidad PÚBLICA, por el puerto PÚBLICO
+                self.send_arp_request(ip_pkt.dstip, PUBLIC_PORT, PUBLIC_MAC, PUBLIC_IP)
                 return
 
             private_src_port = ip_pkt.payload.srcport
@@ -112,15 +111,14 @@ class ProtoRouter(object):
             msg = of.ofp_packet_out()
             msg.data = packet.pack()
             msg.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
-            log_color(CYAN, f"ENVIANDO: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {dst_mac} | Out Port: {PUBLIC_PORT}")
+            log_color(CYAN, f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {dst_mac} | Out Port: {PUBLIC_PORT}")
             self.connection.send(msg)
 
         else:
             log_color(RED, f"NO MATCH: {ip_pkt.srcip} no pertenece a {PRIVATE_SUBNET}/{PRIVATE_MASK}")
 
-
     def send_arp_reply(self, request, out_port, MAC_ADRESS, IP_ADDRESS):
-        
+
         a = arp()
         a.opcode = arp.REPLY
 
@@ -142,28 +140,34 @@ class ProtoRouter(object):
         msg.data = e.pack()
         msg.actions.append(of.ofp_action_output(port=out_port))
 
+        log_color(CYAN, f"ENVIANDO ARP REPLY: {IP_ADDRESS} ({MAC_ADRESS}) → {request.protosrc} ({request.hwsrc}) | Out Port: {out_port}")
+
         self.connection.send(msg)
 
-    def send_arp_request(self, ip):
+    def send_arp_request(self, target_ip, out_port, MAC_ADRESS, IP_ADDRESS):
+        # FIX: ahora recibe directamente la IP a resolver (target_ip),
+        # en vez de leerla de un objeto "request" que no la tenía.
 
         a = arp()
         a.opcode = arp.REQUEST
-        a.hwsrc = PUBLIC_MAC
-        a.protosrc = PUBLIC_IP
+
+        a.hwsrc = MAC_ADRESS
+        a.protosrc = IP_ADDRESS
+
         a.hwdst = EthAddr("00:00:00:00:00:00")
-        a.protodst = ip
+        a.protodst = target_ip
 
         e = ethernet()
         e.type = ethernet.ARP_TYPE
-        e.src = PUBLIC_MAC
+        e.src = MAC_ADRESS
         e.dst = ETHER_BROADCAST
         e.payload = a
 
         msg = of.ofp_packet_out()
         msg.data = e.pack()
-        msg.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
+        msg.actions.append(of.ofp_action_output(port=out_port))
 
-        log_color(CYAN, f"ENVIANDO ARP REQUEST: {PUBLIC_IP} ({PUBLIC_MAC}) → {ip} (Broadcast) | Out Port: {PUBLIC_PORT}")
+        log_color(CYAN, f"ENVIANDO ARP REQUEST: {IP_ADDRESS} ({MAC_ADRESS}) → {target_ip} (Broadcast) | Out Port: {out_port}")
 
         self.connection.send(msg)
 
@@ -172,22 +176,29 @@ class ProtoRouter(object):
         arp_pkt = packet.payload
         in_port = event.port
 
-        log_color(
-            YELLOW, f"RECIBIDO ARP: {arp_pkt.opcode} | "
-            f"{arp_pkt.protosrc} ({arp_pkt.hwsrc}) → {arp_pkt.protodst} ({arp_pkt.hwdst}) | In Port: {in_port}")
+        arp_type = "REQUEST" if arp_pkt.opcode == arp.REQUEST else \
+                   "REPLY" if arp_pkt.opcode == arp.REPLY else \
+                   f"UNKNOWN({arp_pkt.opcode})"
 
+        log_color(
+            YELLOW,
+            f"RECIBIDO ARP {arp_type} | "
+            f"{arp_pkt.protosrc} ({arp_pkt.hwsrc}) → "
+            f"{arp_pkt.protodst} ({arp_pkt.hwdst}) | "
+            f"In Port: {in_port}"
+        )
+
+        # guardamos ya para la ip cual es su MAC
         self.arp_table[arp_pkt.protosrc] = arp_pkt.hwsrc
-    
+
         if arp_pkt.opcode == arp.REQUEST:
 
             if arp_pkt.protodst == PRIVATE_IP:
                 self.send_arp_reply(arp_pkt, in_port, PRIVATE_MAC, PRIVATE_IP)
-
                 return
-            
+
             if arp_pkt.protodst == PUBLIC_IP:
                 self.send_arp_reply(arp_pkt, in_port, PUBLIC_MAC, PUBLIC_IP)
-
                 return
 
             log_color(YELLOW, f"ARP request para {arp_pkt.protodst} no es para el router; ignorado.")
