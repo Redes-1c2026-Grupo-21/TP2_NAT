@@ -73,8 +73,8 @@ class ProtoRouter(object):
 
             dst_mac = self.arp_table.get(ip_pkt.dstip)
             if dst_mac is None:
-                log_color(YELLOW, f"MAC desconocido para {ip_pkt.dstip}: enviando ARP request y esperando respuesta.")
-                self.send_arp_request(ip_pkt.dstip)
+                # FIX: resolvemos el destino PÚBLICO, con la identidad PÚBLICA, por el puerto PÚBLICO
+                self.send_arp_request(ip_pkt.dstip, PUBLIC_PORT, PUBLIC_MAC, PUBLIC_IP)
                 return
 
             private_src_port = transport_pkt.srcport
@@ -82,7 +82,7 @@ class ProtoRouter(object):
             allocated_public_port = self.next_available_port
             self.next_available_port += 1
 
-            self.nat_table[allocated_public_port] = (ip_pkt.srcip, private_src_port)
+            self.nat_table[allocated_public_port] = (ip_pkt.srcip, private_src_port, in_port)
 
             # Instalar Flujo Saliente
             fm = of.ofp_flow_mod()
@@ -117,7 +117,7 @@ class ProtoRouter(object):
             msg = of.ofp_packet_out()
             msg.data = packet.pack()
             msg.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
-            log_color(CYAN, f"ENVIANDO: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {dst_mac} | Out Port: {PUBLIC_PORT}")
+            log_color(CYAN, f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {dst_mac} | Out Port: {PUBLIC_PORT}")
             self.connection.send(msg)
 
         elif ip_pkt.dstip == PUBLIC_IP:
@@ -127,12 +127,12 @@ class ProtoRouter(object):
             if public_dst_port not in self.nat_table:
                 return
 
-            original_ip, original_port = self.nat_table[public_dst_port]
+            original_ip, original_port, original_in_port = self.nat_table[public_dst_port]
 
             private_dst_mac = self.arp_table.get(original_ip)
             if private_dst_mac is None:
-                # Arp request
-                log_color(RED, "Error: No se reconoce la direccion MAC del host privado.")
+
+                self.send_arp_request(original_ip, original_in_port, PRIVATE_MAC, PRIVATE_IP)
                 return
 
             # Instalar Flujo Entrante (para respuesta)
@@ -146,6 +146,8 @@ class ProtoRouter(object):
             fm_back.match.in_port = PUBLIC_PORT
             fm_back.match.nw_proto = ip_pkt.protocol
 
+            fm_back.match.tp_dst = public_dst_port
+
 
             # # Acción (Entrante)
             fm_back.actions.append(of.ofp_action_dl_addr.set_src(PRIVATE_MAC))
@@ -154,7 +156,7 @@ class ProtoRouter(object):
             # NAT
             fm_back.actions.append(of.ofp_action_nw_addr.set_dst(original_ip))
             fm_back.actions.append(of.ofp_action_tp_port.set_dst(original_port))
-            # fm_back.actions.append(of.ofp_action_output(port=original_in_port))
+            fm_back.actions.append(of.ofp_action_output(port=original_in_port))
 
             self.connection.send(fm_back)
 
@@ -167,8 +169,8 @@ class ProtoRouter(object):
 
             msg = of.ofp_packet_out()
             msg.data = packet.pack()
-            # msg.actions.append(of.ofp_action_output(port=original_in_port))
-            log_color(CYAN, f"ENVIANDO: {ip_pkt.srcip} -> {ip_pkt.dstip}:{transport_pkt.dstport}")
+            msg.actions.append(of.ofp_action_output(port=original_in_port))
+            log_color(CYAN, f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip}:{transport_pkt.dstport}")
             self.connection.send(msg)
 
 
