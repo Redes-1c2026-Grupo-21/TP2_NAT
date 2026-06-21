@@ -36,6 +36,9 @@ class ProtoRouter(object):
 
         self.arp_table = {}
 
+        self.nat_table = {}
+        self.next_available_port = 10000
+
     def _handle_PacketIn(self, event):
         if not event.parsed.parsed:
             log.warning("[DROP] PacketIn con trama no reconocida. POX no pudo decodificar el paquete.")
@@ -69,6 +72,13 @@ class ProtoRouter(object):
                 self.send_arp_request(ip_pkt.dstip)
                 return
 
+            private_src_port = ip_pkt.payload.srcport
+
+            allocated_public_port = self.next_available_port
+            self.next_available_port += 1
+
+            self.nat_table[allocated_public_port] = (ip_pkt.srcip, private_src_port)
+
             # Instalar Flujo Saliente
             fm = of.ofp_flow_mod()
             fm.idle_timeout = 10
@@ -77,32 +87,28 @@ class ProtoRouter(object):
             fm.match.nw_src = ip_pkt.srcip
             fm.match.dl_type = 0x800  # IPv4
             fm.match.in_port = in_port
+            fm.match.nw_proto = ip_pkt.protocol
+            fm.match.tp_src = private_src_port
 
             # Acción (Saliente)
             fm.actions.append(of.ofp_action_dl_addr.set_src(PUBLIC_MAC))
             fm.actions.append(of.ofp_action_dl_addr.set_dst(dst_mac))
+
+            # NAT
+            fm.actions.append(of.ofp_action_nw_addr.set_src(PUBLIC_IP))
+            fm.actions.append(of.ofp_action_tp_port.set_src(allocated_public_port))
+
             fm.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
             self.connection.send(fm)
-
-            # Instalar Flujo Entrante (para respuesta)
-            fm_back = of.ofp_flow_mod()
-            fm_back.idle_timeout = 10
-
-            # Filtro (Entrante)
-            fm_back.match.nw_src = ip_pkt.dstip
-            fm_back.match.nw_dst = ip_pkt.srcip
-            fm_back.match.dl_type = 0x800  # IPv4
-            fm_back.match.in_port = PUBLIC_PORT
-
-            # Acción (Entrante)
-            fm_back.actions.append(of.ofp_action_dl_addr.set_src(PRIVATE_MAC))
-            fm_back.actions.append(of.ofp_action_dl_addr.set_dst(packet.src))
-            fm_back.actions.append(of.ofp_action_output(port=in_port))
-            self.connection.send(fm_back)
 
             # Reenviar paquete actual con MACs actualizadas (Los posteriores pasan por flujo)
             packet.src = PUBLIC_MAC
             packet.dst = dst_mac
+
+            # NAT
+            ip_pkt.srcip = PUBLIC_IP
+            ip_pkt.payload.srcport = allocated_public_port
+
             msg = of.ofp_packet_out()
             msg.data = packet.pack()
             msg.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
