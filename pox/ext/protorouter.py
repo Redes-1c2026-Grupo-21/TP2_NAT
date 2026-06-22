@@ -33,6 +33,7 @@ class ProtoRouter(object):
         connection.addListeners(self)
 
         self.arp_table = {}
+        self.pending_arp = {}  # ip a resolver -> lista de eventos (paquetes) en espera
 
         self.nat_table = {}
         self.next_available_port = 10000
@@ -73,8 +74,9 @@ class ProtoRouter(object):
 
             dst_mac = self.arp_table.get(ip_pkt.dstip)
             if dst_mac is None:
+                log_color(YELLOW, f"MAC de {ip_pkt.dstip} desconocida: encolo el paquete y resuelvo por ARP")
                 # FIX: resolvemos el destino PÚBLICO, con la identidad PÚBLICA, por el puerto PÚBLICO
-                self.send_arp_request(ip_pkt.dstip, PUBLIC_PORT, PUBLIC_MAC, PUBLIC_IP)
+                self.queue_pending(ip_pkt.dstip, event, PUBLIC_PORT, PUBLIC_MAC, PUBLIC_IP)
                 return
 
             private_src_port = transport_pkt.srcport
@@ -131,8 +133,8 @@ class ProtoRouter(object):
 
             private_dst_mac = self.arp_table.get(original_ip)
             if private_dst_mac is None:
-
-                self.send_arp_request(original_ip, original_in_port, PRIVATE_MAC, PRIVATE_IP)
+                log_color(YELLOW, f"MAC de {original_ip} desconocida: encolo el paquete y resuelvo por ARP")
+                self.queue_pending(original_ip, event, original_in_port, PRIVATE_MAC, PRIVATE_IP)
                 return
 
             # Instalar Flujo Entrante (para respuesta)
@@ -177,6 +179,22 @@ class ProtoRouter(object):
         else:
             log_color(RED, f"NO MATCH: {ip_pkt.srcip} no pertenece a {PRIVATE_SUBNET}/{PRIVATE_MASK}")
 
+
+    def queue_pending(self, ip, event, out_port, mac_address, ip_address):
+        # Si ya hay paquetes esperando esa IP, no repetimos el ARP request.
+        is_first = not self.pending_arp.get(ip)
+        self.pending_arp.setdefault(ip, []).append(event)
+        if is_first:
+            self.send_arp_request(ip, out_port, mac_address, ip_address)
+
+    def resolve_pending(self, ip):
+        pending = self.pending_arp.pop(ip, None)
+        if not pending:
+            return
+
+        log_color(CYAN, f"MAC de {ip} resuelta: reprocesando {len(pending)} paquete(s) en espera")
+        for event in pending:
+            self.handle_ip(event)
 
     def send_arp_reply(self, request, out_port, MAC_ADRESS, IP_ADDRESS):
         
@@ -251,6 +269,9 @@ class ProtoRouter(object):
 
         # guardamos ya para la ip cual es su MAC
         self.arp_table[arp_pkt.protosrc] = arp_pkt.hwsrc
+
+        # Si había paquetes esperando que se resuelva esta IP, los reprocesamos ahora.
+        self.resolve_pending(arp_pkt.protosrc)
 
         if arp_pkt.opcode == arp.REQUEST:
 
