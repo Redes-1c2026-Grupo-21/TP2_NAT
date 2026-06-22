@@ -1,7 +1,7 @@
 # Import some POX stuff
-from pox.core import core                       # Main POX object
-import pox.openflow.libopenflow_01 as of        # OpenFlow 1.0 library
-from pox.lib.addresses import EthAddr, IPAddr   # Address types
+from pox.core import core  # Main POX object
+import pox.openflow.libopenflow_01 as of  # OpenFlow 1.0 library
+from pox.lib.addresses import EthAddr, IPAddr  # Address types
 from pox.lib.packet.ethernet import ethernet, ETHER_BROADCAST
 
 from pox.lib.packet.arp import arp
@@ -18,13 +18,13 @@ def log_color(color, msg):
     log.info(f"{color}{msg}{RESET}")
 
 
-PRIVATE_SUBNET = IPAddr("192.168.1.0")      # Red interna
-PRIVATE_MASK = 24                           # Máscara de la red interna
-PRIVATE_IP = IPAddr("192.168.1.254")        # IP del router en la red privada
-PUBLIC_IP = IPAddr("200.0.0.254")           # IP del router en la red pública
-PUBLIC_MAC = EthAddr("00:00:00:aa:aa:aa")   # MAC del router hacia la red pública
+PRIVATE_SUBNET = IPAddr("192.168.1.0")  # Red interna
+PRIVATE_MASK = 24  # Máscara de la red interna
+PRIVATE_IP = IPAddr("192.168.1.254")  # IP del router en la red privada
+PUBLIC_IP = IPAddr("200.0.0.254")  # IP del router en la red pública
+PUBLIC_MAC = EthAddr("00:00:00:aa:aa:aa")  # MAC del router hacia la red pública
 PRIVATE_MAC = EthAddr("00:00:00:bb:bb:bb")  # MAC del router hacia la red privada
-PUBLIC_PORT = 1                             # Puerto del switch conectado a la red pública
+PUBLIC_PORT = 1  # Puerto del switch conectado a la red pública
 
 
 class ProtoRouter(object):
@@ -40,7 +40,10 @@ class ProtoRouter(object):
 
     def _handle_PacketIn(self, event):
         if not event.parsed.parsed:
-            log.warning("[DROP] PacketIn con trama no reconocida. POX no pudo decodificar el paquete.")
+            log.warning(
+                "[DROP] PacketIn con trama no reconocida. "
+                "POX no pudo decodificar el paquete."
+            )
             return
 
         if event.parsed.type == ethernet.IP_TYPE:
@@ -48,9 +51,9 @@ class ProtoRouter(object):
 
         elif event.parsed.type == ethernet.ARP_TYPE:
             self.handle_arp(event)
-        
+
         else:
-            log_color(YELLOW, f"Paquete ignorado: protocolo distinto de IPv4 y ARP.")
+            log_color(YELLOW, "Paquete ignorado: protocolo distinto de IPv4 y ARP.")
 
     def handle_ip(self, event):
         packet = event.parsed
@@ -58,11 +61,16 @@ class ProtoRouter(object):
         in_port = event.port
 
         log_color(
-            YELLOW, f"RECIBIDO IP: {ip_pkt.srcip} → {ip_pkt.dstip} | "
-            f"MAC: {packet.src} → {packet.dst} | In Port: {in_port}")
+            YELLOW,
+            f"RECIBIDO IP: {ip_pkt.srcip} → {ip_pkt.dstip} | "
+            f"MAC: {packet.src} → {packet.dst} | In Port: {in_port}",
+        )
 
         # por si es icmp
-        if (ip_pkt.protocol == ip_pkt.TCP_PROTOCOL or ip_pkt.protocol == ip_pkt.UDP_PROTOCOL):
+        if (
+            ip_pkt.protocol == ip_pkt.TCP_PROTOCOL
+            or ip_pkt.protocol == ip_pkt.UDP_PROTOCOL
+        ):
             transport_pkt = ip_pkt.payload
         else:
             log_color(YELLOW, "No es TCP ni UDP. Lo ignoro.")
@@ -70,13 +78,24 @@ class ProtoRouter(object):
 
         if ip_pkt.srcip.inNetwork(PRIVATE_SUBNET, PRIVATE_MASK):
 
-            log_color(GREEN, f"MATCH: {ip_pkt.srcip} pertenece a la red privada {PRIVATE_SUBNET}/{PRIVATE_MASK}")
+            log_color(
+                GREEN,
+                f"MATCH: {ip_pkt.srcip} pertenece a la red privada "
+                f"{PRIVATE_SUBNET}/{PRIVATE_MASK}",
+            )
 
             dst_mac = self.arp_table.get(ip_pkt.dstip)
             if dst_mac is None:
-                log_color(YELLOW, f"MAC de {ip_pkt.dstip} desconocida: encolo el paquete y resuelvo por ARP")
-                # FIX: resolvemos el destino PÚBLICO, con la identidad PÚBLICA, por el puerto PÚBLICO
-                self.queue_pending(ip_pkt.dstip, event, PUBLIC_PORT, PUBLIC_MAC, PUBLIC_IP)
+                log_color(
+                    YELLOW,
+                    f"MAC de {ip_pkt.dstip} desconocida: encolo el paquete "
+                    "y resuelvo por ARP",
+                )
+                # FIX: resolvemos el destino PÚBLICO, con la identidad PÚBLICA,
+                # por el puerto PÚBLICO
+                self.queue_pending(
+                    ip_pkt.dstip, event, PUBLIC_PORT, PUBLIC_MAC, PUBLIC_IP
+                )
                 return
 
             private_src_port = transport_pkt.srcport
@@ -84,7 +103,11 @@ class ProtoRouter(object):
             allocated_public_port = self.next_available_port
             self.next_available_port += 1
 
-            self.nat_table[allocated_public_port] = (ip_pkt.srcip, private_src_port, in_port)
+            self.nat_table[allocated_public_port] = (
+                ip_pkt.srcip,
+                private_src_port,
+                in_port,
+            )
 
             # Instalar Flujo Saliente
             fm = of.ofp_flow_mod()
@@ -108,7 +131,8 @@ class ProtoRouter(object):
             fm.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
             self.connection.send(fm)
 
-            # Reenviar paquete actual con MACs actualizadas (Los posteriores pasan por flujo)
+            # Reenviar paquete actual con MACs actualizadas
+            # (Los posteriores pasan por flujo)
             packet.src = PUBLIC_MAC
             packet.dst = dst_mac
 
@@ -119,7 +143,11 @@ class ProtoRouter(object):
             msg = of.ofp_packet_out()
             msg.data = packet.pack()
             msg.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
-            log_color(CYAN, f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {dst_mac} | Out Port: {PUBLIC_PORT}")
+            log_color(
+                CYAN,
+                f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip} | "
+                f"MAC: {PUBLIC_MAC} → {dst_mac} | Out Port: {PUBLIC_PORT}",
+            )
             self.connection.send(msg)
 
         elif ip_pkt.dstip == PUBLIC_IP:
@@ -129,12 +157,20 @@ class ProtoRouter(object):
             if public_dst_port not in self.nat_table:
                 return
 
-            original_ip, original_port, original_in_port = self.nat_table[public_dst_port]
+            original_ip, original_port, original_in_port = self.nat_table[
+                public_dst_port
+            ]
 
             private_dst_mac = self.arp_table.get(original_ip)
             if private_dst_mac is None:
-                log_color(YELLOW, f"MAC de {original_ip} desconocida: encolo el paquete y resuelvo por ARP")
-                self.queue_pending(original_ip, event, original_in_port, PRIVATE_MAC, PRIVATE_IP)
+                log_color(
+                    YELLOW,
+                    f"MAC de {original_ip} desconocida: encolo el paquete "
+                    "y resuelvo por ARP",
+                )
+                self.queue_pending(
+                    original_ip, event, original_in_port, PRIVATE_MAC, PRIVATE_IP
+                )
                 return
 
             # Instalar Flujo Entrante (para respuesta)
@@ -149,7 +185,6 @@ class ProtoRouter(object):
             fm_back.match.nw_proto = ip_pkt.protocol
 
             fm_back.match.tp_dst = public_dst_port
-
 
             # # Acción (Entrante)
             fm_back.actions.append(of.ofp_action_dl_addr.set_src(PRIVATE_MAC))
@@ -172,13 +207,18 @@ class ProtoRouter(object):
             msg = of.ofp_packet_out()
             msg.data = packet.pack()
             msg.actions.append(of.ofp_action_output(port=original_in_port))
-            log_color(CYAN, f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip}:{transport_pkt.dstport}")
+            log_color(
+                CYAN,
+                f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip}:{transport_pkt.dstport}",
+            )
             self.connection.send(msg)
 
-
         else:
-            log_color(RED, f"NO MATCH: {ip_pkt.srcip} no pertenece a {PRIVATE_SUBNET}/{PRIVATE_MASK}")
-
+            log_color(
+                RED,
+                f"NO MATCH: {ip_pkt.srcip} no pertenece a "
+                f"{PRIVATE_SUBNET}/{PRIVATE_MASK}",
+            )
 
     def queue_pending(self, ip, event, out_port, mac_address, ip_address):
         # Si ya hay paquetes esperando esa IP, no repetimos el ARP request.
@@ -192,12 +232,15 @@ class ProtoRouter(object):
         if not pending:
             return
 
-        log_color(CYAN, f"MAC de {ip} resuelta: reprocesando {len(pending)} paquete(s) en espera")
+        log_color(
+            CYAN,
+            f"MAC de {ip} resuelta: reprocesando {len(pending)} paquete(s) en espera",
+        )
         for event in pending:
             self.handle_ip(event)
 
     def send_arp_reply(self, request, out_port, MAC_ADRESS, IP_ADDRESS):
-        
+
         a = arp()
         a.opcode = arp.REPLY
 
@@ -219,7 +262,11 @@ class ProtoRouter(object):
         msg.data = e.pack()
         msg.actions.append(of.ofp_action_output(port=out_port))
 
-        log_color(CYAN, f"ENVIANDO ARP REPLY: {IP_ADDRESS} ({MAC_ADRESS}) → {request.protosrc} ({request.hwsrc}) | Out Port: {out_port}")
+        log_color(
+            CYAN,
+            f"ENVIANDO ARP REPLY: {IP_ADDRESS} ({MAC_ADRESS}) → "
+            f"{request.protosrc} ({request.hwsrc}) | Out Port: {out_port}",
+        )
 
         self.connection.send(msg)
 
@@ -246,7 +293,11 @@ class ProtoRouter(object):
         msg.data = e.pack()
         msg.actions.append(of.ofp_action_output(port=out_port))
 
-        log_color(CYAN, f"ENVIANDO ARP REQUEST: {IP_ADDRESS} ({MAC_ADRESS}) → {target_ip} (Broadcast) | Out Port: {out_port}")
+        log_color(
+            CYAN,
+            f"ENVIANDO ARP REQUEST: {IP_ADDRESS} ({MAC_ADRESS}) → "
+            f"{target_ip} (Broadcast) | Out Port: {out_port}",
+        )
 
         self.connection.send(msg)
 
@@ -255,16 +306,20 @@ class ProtoRouter(object):
         arp_pkt = packet.payload
         in_port = event.port
 
-        arp_type = "REQUEST" if arp_pkt.opcode == arp.REQUEST else \
-                   "REPLY" if arp_pkt.opcode == arp.REPLY else \
-                   f"UNKNOWN({arp_pkt.opcode})"
+        arp_type = (
+            "REQUEST"
+            if arp_pkt.opcode == arp.REQUEST
+            else (
+                "REPLY" if arp_pkt.opcode == arp.REPLY else f"UNKNOWN({arp_pkt.opcode})"
+            )
+        )
 
         log_color(
             YELLOW,
             f"RECIBIDO ARP {arp_type} | "
             f"{arp_pkt.protosrc} ({arp_pkt.hwsrc}) → "
             f"{arp_pkt.protodst} ({arp_pkt.hwdst}) | "
-            f"In Port: {in_port}"
+            f"In Port: {in_port}",
         )
 
         # guardamos ya para la ip cual es su MAC
@@ -283,7 +338,10 @@ class ProtoRouter(object):
                 self.send_arp_reply(arp_pkt, in_port, PUBLIC_MAC, PUBLIC_IP)
                 return
 
-            log_color(YELLOW, f"ARP request para {arp_pkt.protodst} no es para el router; ignorado.")
+            log_color(
+                YELLOW,
+                f"ARP request para {arp_pkt.protodst} no es para el router; ignorado.",
+            )
 
 
 def launch():

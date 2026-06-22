@@ -22,27 +22,43 @@ from mininet.log import setLogLevel
 #        └───────┘                           \    /                           └───────┘
 #       /       /                             \  /                           /       /
 #      ─────────                               \/                           ─────────
-#  IP:  200.0.0.1/24                                                    IP:  192.168.1.2/24
-#  DG:  200.0.0.254                                                     DG:  192.168.1.254
-#  MAC: 00:00:00:00:00:01                                               MAC: 00:00:00:00:00:02
+#  IP:  200.0.0.1/24                                                    IP:  192.168.1.2/24  # noqa: E501
+#  DG:  200.0.0.254                                                     DG:  192.168.1.254  # noqa: E501
+#  MAC: 00:00:00:00:00:01                                               MAC: 00:00:00:00:00:02  # noqa: E501
 #
 
 
 class NATTopo(Topo):
     def build(self):
-        s1 = self.addSwitch('s1')
+        s1 = self.addSwitch("s1")
 
-        h1 = self.addHost('h1', ip='200.0.0.1/24',
-                          mac='00:00:00:00:00:01', defaultRoute='via 200.0.0.254')
+        h1 = self.addHost(
+            "h1",
+            ip="200.0.0.1/24",
+            mac="00:00:00:00:00:01",
+            defaultRoute="via 200.0.0.254",
+        )
 
-        h2 = self.addHost('h2', ip='192.168.1.2/24', mac='00:00:00:00:00:02',
-                          defaultRoute='via 192.168.1.254')
-        
-        h3 = self.addHost('h3', ip='192.168.1.3/24', mac='00:00:00:00:00:03',
-                          defaultRoute='via 192.168.1.254')
-        
-        h4 = self.addHost('h4', ip='192.168.1.4/24', mac='00:00:00:00:00:04',
-                          defaultRoute='via 192.168.1.254')
+        h2 = self.addHost(
+            "h2",
+            ip="192.168.1.2/24",
+            mac="00:00:00:00:00:02",
+            defaultRoute="via 192.168.1.254",
+        )
+
+        h3 = self.addHost(
+            "h3",
+            ip="192.168.1.3/24",
+            mac="00:00:00:00:00:03",
+            defaultRoute="via 192.168.1.254",
+        )
+
+        h4 = self.addHost(
+            "h4",
+            ip="192.168.1.4/24",
+            mac="00:00:00:00:00:04",
+            defaultRoute="via 192.168.1.254",
+        )
 
         self.addLink(h1, s1)
         self.addLink(h2, s1)
@@ -62,19 +78,15 @@ def run():
         host.cmd("sysctl -w net.ipv6.conf.lo.disable_ipv6=1")
 
     # Deshabilita IPv6 en switch
-    s1 = net.get('s1')
+    s1 = net.get("s1")
     s1.cmd("sysctl -w net.ipv6.conf.all.disable_ipv6=1")
     s1.cmd("sysctl -w net.ipv6.conf.default.disable_ipv6=1")
     s1.cmd("sysctl -w net.ipv6.conf.lo.disable_ipv6=1")
-
-    # Entradas ARP para debug (TODO: Usar Protocolo ARP)
-    #net.get('h1').setARP('200.0.0.254', '00:00:00:aa:aa:aa')
-    #net.get('h2').setARP('192.168.1.254', '00:00:00:bb:bb:bb')
 
     CLI(net)
     net.stop()
 
 
-if __name__ == '__main__':
-    setLogLevel('info')
+if __name__ == "__main__":
+    setLogLevel("info")
     run()
