@@ -119,6 +119,8 @@ class ProtoRouter(object):
             fm.match.in_port = in_port
             fm.match.nw_proto = ip_pkt.protocol
             fm.match.tp_src = private_src_port
+            fm.match.nw_dst = ip_pkt.dstip
+            fm.match.tp_dst = transport_pkt.dstport
 
             # Acción (Saliente)
             fm.actions.append(of.ofp_action_dl_addr.set_src(PUBLIC_MAC))
@@ -156,7 +158,8 @@ class ProtoRouter(object):
 
             if public_dst_port not in self.nat_table:
                 return
-
+            # Recuperamos la IP y puerto originales
+            # del host privado que inició la conexión
             original_ip, original_port, original_in_port = self.nat_table[
                 public_dst_port
             ]
