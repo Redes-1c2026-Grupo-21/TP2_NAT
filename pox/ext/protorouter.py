@@ -44,7 +44,7 @@ class ProtoRouter(object):
 
         elif event.parsed.type == ethernet.ARP_TYPE:
             self.handle_arp(event)
-
+        
         else:
             log_color(YELLOW, f"Paquete ignorado: protocolo distinto de IPv4 y ARP.")
 
@@ -57,16 +57,29 @@ class ProtoRouter(object):
             YELLOW, f"RECIBIDO IP: {ip_pkt.srcip} → {ip_pkt.dstip} | "
             f"MAC: {packet.src} → {packet.dst} | In Port: {in_port}")
 
+        # por si es icmp
+        if (ip_pkt.protocol == ip_pkt.TCP_PROTOCOL or ip_pkt.protocol == ip_pkt.UDP_PROTOCOL):
+            transport_pkt = ip_pkt.payload
+        else:
+            log_color(YELLOW, "No es TCP ni UDP. Lo ignoro.")
+            return
+
         if ip_pkt.srcip.inNetwork(PRIVATE_SUBNET, PRIVATE_MASK):
 
             log_color(GREEN, f"MATCH: {ip_pkt.srcip} pertenece a la red privada {PRIVATE_SUBNET}/{PRIVATE_MASK}")
 
             dst_mac = self.arp_table.get(ip_pkt.dstip)
             if dst_mac is None:
-                log_color(YELLOW, f"MAC desconocido para {ip_pkt.dstip}: enviando ARP request y esperando respuesta.")
                 # FIX: resolvemos el destino PÚBLICO, con la identidad PÚBLICA, por el puerto PÚBLICO
                 self.send_arp_request(ip_pkt.dstip, PUBLIC_PORT, PUBLIC_MAC, PUBLIC_IP)
                 return
+
+            private_src_port = transport_pkt.srcport
+
+            allocated_public_port = self.next_available_port
+            self.next_available_port += 1
+
+            self.nat_table[allocated_public_port] = (ip_pkt.srcip, private_src_port, in_port)
 
             # Instalar Flujo Saliente
             fm = of.ofp_flow_mod()
@@ -102,17 +115,77 @@ class ProtoRouter(object):
             # Reenviar paquete actual con MACs actualizadas (Los posteriores pasan por flujo)
             packet.src = PUBLIC_MAC
             packet.dst = dst_mac
+
+            # NAT
+            ip_pkt.srcip = PUBLIC_IP
+            transport_pkt.srcport = allocated_public_port
+
             msg = of.ofp_packet_out()
             msg.data = packet.pack()
             msg.actions.append(of.ofp_action_output(port=PUBLIC_PORT))
             log_color(CYAN, f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip} | MAC: {PUBLIC_MAC} → {dst_mac} | Out Port: {PUBLIC_PORT}")
             self.connection.send(msg)
 
+        elif ip_pkt.dstip == PUBLIC_IP:
+
+            public_dst_port = transport_pkt.dstport
+
+            if public_dst_port not in self.nat_table:
+                return
+
+            original_ip, original_port, original_in_port = self.nat_table[public_dst_port]
+
+            private_dst_mac = self.arp_table.get(original_ip)
+            if private_dst_mac is None:
+
+                self.send_arp_request(original_ip, original_in_port, PRIVATE_MAC, PRIVATE_IP)
+                return
+
+            # Instalar Flujo Entrante (para respuesta)
+            fm_back = of.ofp_flow_mod()
+            fm_back.idle_timeout = 10
+
+            # # Filtro (Entrante)
+            fm_back.match.nw_src = ip_pkt.srcip
+            fm_back.match.nw_dst = PUBLIC_IP
+            fm_back.match.dl_type = 0x800  # IPv4
+            fm_back.match.in_port = PUBLIC_PORT
+            fm_back.match.nw_proto = ip_pkt.protocol
+
+            fm_back.match.tp_dst = public_dst_port
+
+
+            # # Acción (Entrante)
+            fm_back.actions.append(of.ofp_action_dl_addr.set_src(PRIVATE_MAC))
+            fm_back.actions.append(of.ofp_action_dl_addr.set_dst(private_dst_mac))
+
+            # NAT
+            fm_back.actions.append(of.ofp_action_nw_addr.set_dst(original_ip))
+            fm_back.actions.append(of.ofp_action_tp_port.set_dst(original_port))
+            fm_back.actions.append(of.ofp_action_output(port=original_in_port))
+
+            self.connection.send(fm_back)
+
+            packet.src = PRIVATE_MAC
+            packet.dst = private_dst_mac
+
+            # NAT
+            ip_pkt.dstip = original_ip
+            transport_pkt.dstport = original_port
+
+            msg = of.ofp_packet_out()
+            msg.data = packet.pack()
+            msg.actions.append(of.ofp_action_output(port=original_in_port))
+            log_color(CYAN, f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip}:{transport_pkt.dstport}")
+            self.connection.send(msg)
+
+
         else:
             log_color(RED, f"NO MATCH: {ip_pkt.srcip} no pertenece a {PRIVATE_SUBNET}/{PRIVATE_MASK}")
 
-    def send_arp_reply(self, request, out_port, MAC_ADRESS, IP_ADDRESS):
 
+    def send_arp_reply(self, request, out_port, MAC_ADRESS, IP_ADDRESS):
+        
         a = arp()
         a.opcode = arp.REPLY
 
