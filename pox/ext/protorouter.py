@@ -26,6 +26,8 @@ PUBLIC_MAC = EthAddr("00:00:00:aa:aa:aa")  # MAC del router hacia la red públic
 PRIVATE_MAC = EthAddr("00:00:00:bb:bb:bb")  # MAC del router hacia la red privada
 PUBLIC_PORT = 1  # Puerto del switch conectado a la red pública
 
+FLOW_IDLE_TIMEOUT = 30  # Segundos de inactividad antes de expirar un flujo NAT
+
 
 class ProtoRouter(object):
     def __init__(self, connection):
@@ -149,7 +151,7 @@ class ProtoRouter(object):
 
             # Instalar Flujo Saliente
             fm = of.ofp_flow_mod()
-            fm.idle_timeout = 10
+            fm.idle_timeout = FLOW_IDLE_TIMEOUT
             # usamos el puerto público como cookie para identificar el flujo
             fm.cookie = allocated_public_port
             fm.flags = (
@@ -221,7 +223,7 @@ class ProtoRouter(object):
 
             # Instalar Flujo Entrante (para respuesta)
             fm_back = of.ofp_flow_mod()
-            fm_back.idle_timeout = 10
+            fm_back.idle_timeout = FLOW_IDLE_TIMEOUT
             # usamos el puerto público como cookie para identificar el flujo
             fm_back.cookie = public_dst_port
             fm_back.flags = (
@@ -260,7 +262,11 @@ class ProtoRouter(object):
             msg.actions.append(of.ofp_action_output(port=original_in_port))
             log_color(
                 CYAN,
-                f"ENVIANDO IP: {ip_pkt.srcip} → {ip_pkt.dstip}:{transport_pkt.dstport}",
+                f"ENVIANDO IP: {ip_pkt.srcip} → "
+                f"{ip_pkt.dstip}:{transport_pkt.dstport} | "
+                f"NAT: {PUBLIC_IP}:{public_dst_port} → "
+                f"{original_ip}:{original_port} | "
+                f"Out Port: {original_in_port}",
             )
             self.connection.send(msg)
 
