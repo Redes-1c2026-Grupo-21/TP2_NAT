@@ -35,7 +35,8 @@ class ProtoRouter(object):
         self.arp_table = {}
         self.pending_arp = {}  # ip a resolver -> lista de eventos (paquetes) en espera
 
-        self.nat_table = {}
+        self.nat_entrante = {}
+        self.nat_saliente = {}  # 5-tupla de la conexión -> puerto público ya asignado
         self.next_available_port = 10000
 
     def _handle_PacketIn(self, event):
@@ -100,10 +101,26 @@ class ProtoRouter(object):
 
             private_src_port = transport_pkt.srcport
 
-            allocated_public_port = self.next_available_port
-            self.next_available_port += 1
+            # Si esta misma conexión ya tenía un puerto público asignado
+            # (p.ej. el flujo expiró por idle_timeout pero la conexión TCP
+            # sigue viva), reusamos el mismo puerto en vez de asignar uno
+            # nuevo: si no, el servidor ve paquetes con un puerto origen
+            # distinto a mitad de conexión y la rechaza (RST).
+            conn_key = (
+                in_port,
+                ip_pkt.protocol,
+                ip_pkt.srcip,
+                private_src_port,
+                ip_pkt.dstip,
+                transport_pkt.dstport,
+            )
+            allocated_public_port = self.nat_saliente.get(conn_key)
+            if allocated_public_port is None:
+                allocated_public_port = self.next_available_port
+                self.next_available_port += 1
+                self.nat_saliente[conn_key] = allocated_public_port
 
-            self.nat_table[allocated_public_port] = (
+            self.nat_entrante[allocated_public_port] = (
                 ip_pkt.srcip,
                 private_src_port,
                 in_port,
@@ -156,11 +173,11 @@ class ProtoRouter(object):
 
             public_dst_port = transport_pkt.dstport
 
-            if public_dst_port not in self.nat_table:
+            if public_dst_port not in self.nat_entrante:
                 return
             # Recuperamos la IP y puerto originales
             # del host privado que inició la conexión
-            original_ip, original_port, original_in_port = self.nat_table[
+            original_ip, original_port, original_in_port = self.nat_entrante[
                 public_dst_port
             ]
 
