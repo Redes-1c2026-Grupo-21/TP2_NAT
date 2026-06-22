@@ -33,11 +33,29 @@ class ProtoRouter(object):
         connection.addListeners(self)
 
         self.arp_table = {}
-        self.pending_arp = {}  # ip a resolver -> lista de eventos (paquetes) en espera
+        self.packets_pending_arp = {}  # ip -> lista de eventos (paquetes) pendientes
 
         self.nat_entrante = {}
         self.nat_saliente = {}  # 5-tupla de la conexión -> puerto público ya asignado
-        self.next_available_port = 10000
+        self.port_to_conn_key = {}  # puerto público -> 5-tupla de la conexión
+        self.free_public_ports = set(
+            range(10000, 65536)
+        )  # pool de puertos públicos libres
+
+    def _handle_FlowRemoved(self, event):
+        port = (
+            event.ofp.cookie
+        )  # usamos el puerto público como cookie para identificar el flujo
+        conn_key = self.port_to_conn_key.pop(port, None)
+        if conn_key is not None:
+            self.nat_saliente.pop(conn_key, None)
+            self.nat_entrante.pop(port, None)
+            self.free_public_ports.add(port)
+            log_color(
+                YELLOW,
+                f"Flujo expirado: puerto público {port} liberado y "
+                f"conexión {conn_key} eliminada de las tablas de NAT.",
+            )
 
     def _handle_PacketIn(self, event):
         if not event.parsed.parsed:
@@ -116,8 +134,9 @@ class ProtoRouter(object):
             )
             allocated_public_port = self.nat_saliente.get(conn_key)
             if allocated_public_port is None:
-                allocated_public_port = self.next_available_port
-                self.next_available_port += 1
+                allocated_public_port = (
+                    self.free_public_ports.pop()
+                )  # asignamos un puerto público disponible
                 self.nat_saliente[conn_key] = allocated_public_port
 
             self.nat_entrante[allocated_public_port] = (
@@ -126,9 +145,16 @@ class ProtoRouter(object):
                 in_port,
             )
 
+            self.port_to_conn_key[allocated_public_port] = conn_key
+
             # Instalar Flujo Saliente
             fm = of.ofp_flow_mod()
             fm.idle_timeout = 10
+            # usamos el puerto público como cookie para identificar el flujo
+            fm.cookie = allocated_public_port
+            fm.flags = (
+                of.OFPFF_SEND_FLOW_REM
+            )  # para recibir notificación cuando el flujo expire
 
             # Filtro (Saliente)
             fm.match.nw_src = ip_pkt.srcip
@@ -196,6 +222,11 @@ class ProtoRouter(object):
             # Instalar Flujo Entrante (para respuesta)
             fm_back = of.ofp_flow_mod()
             fm_back.idle_timeout = 10
+            # usamos el puerto público como cookie para identificar el flujo
+            fm_back.cookie = public_dst_port
+            fm_back.flags = (
+                of.OFPFF_SEND_FLOW_REM
+            )  # para recibir notificación cuando el flujo expire
 
             # # Filtro (Entrante)
             fm_back.match.nw_src = ip_pkt.srcip
@@ -242,13 +273,13 @@ class ProtoRouter(object):
 
     def queue_pending(self, ip, event, out_port, mac_address, ip_address):
         # Si ya hay paquetes esperando esa IP, no repetimos el ARP request.
-        is_first = not self.pending_arp.get(ip)
-        self.pending_arp.setdefault(ip, []).append(event)
+        is_first = not self.packets_pending_arp.get(ip)
+        self.packets_pending_arp.setdefault(ip, []).append(event)
         if is_first:
             self.send_arp_request(ip, out_port, mac_address, ip_address)
 
     def resolve_pending(self, ip):
-        pending = self.pending_arp.pop(ip, None)
+        pending = self.packets_pending_arp.pop(ip, None)
         if not pending:
             return
 
