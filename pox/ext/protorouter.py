@@ -37,9 +37,8 @@ class ProtoRouter(object):
         self.arp_table = {}
         self.packets_pending_arp = {}  # ip -> lista de eventos (paquetes) pendientes
 
-        self.nat_entrante = {}
-        self.nat_saliente = {}  # 5-tupla de la conexión -> puerto público ya asignado
-        self.port_to_conn_key = {}  # puerto público -> 5-tupla de la conexión
+        self.nat_saliente = {}  # connection_data -> puerto público asignado
+        self.nat_entrante = {}  # puerto público -> connection_data (inverso)
         self.free_public_ports = set(
             range(10000, 65536)
         )  # pool de puertos públicos libres
@@ -48,15 +47,14 @@ class ProtoRouter(object):
         port = (
             event.ofp.cookie
         )  # usamos el puerto público como cookie para identificar el flujo
-        conn_key = self.port_to_conn_key.pop(port, None)
-        if conn_key is not None:
-            self.nat_saliente.pop(conn_key, None)
-            self.nat_entrante.pop(port, None)
+        connection_data = self.nat_entrante.pop(port, None)
+        if connection_data is not None:
+            self.nat_saliente.pop(connection_data, None)
             self.free_public_ports.add(port)
             log_color(
                 YELLOW,
                 f"Flujo expirado: puerto público {port} liberado y "
-                f"conexión {conn_key} eliminada de las tablas de NAT.",
+                f"conexión {connection_data} eliminada de las tablas de NAT.",
             )
 
     def _handle_PacketIn(self, event):
@@ -126,7 +124,7 @@ class ProtoRouter(object):
             # sigue viva), reusamos el mismo puerto en vez de asignar uno
             # nuevo: si no, el servidor ve paquetes con un puerto origen
             # distinto a mitad de conexión y la rechaza (RST).
-            conn_key = (
+            connection_data = (
                 in_port,
                 ip_pkt.protocol,
                 ip_pkt.srcip,
@@ -134,20 +132,14 @@ class ProtoRouter(object):
                 ip_pkt.dstip,
                 transport_pkt.dstport,
             )
-            allocated_public_port = self.nat_saliente.get(conn_key)
+            allocated_public_port = self.nat_saliente.get(connection_data)
             if allocated_public_port is None:
                 allocated_public_port = (
                     self.free_public_ports.pop()
                 )  # asignamos un puerto público disponible
-                self.nat_saliente[conn_key] = allocated_public_port
+                self.nat_saliente[connection_data] = allocated_public_port
 
-            self.nat_entrante[allocated_public_port] = (
-                ip_pkt.srcip,
-                private_src_port,
-                in_port,
-            )
-
-            self.port_to_conn_key[allocated_public_port] = conn_key
+            self.nat_entrante[allocated_public_port] = connection_data
 
             # Instalar Flujo Saliente
             fm = of.ofp_flow_mod()
@@ -201,13 +193,19 @@ class ProtoRouter(object):
 
             public_dst_port = transport_pkt.dstport
 
-            if public_dst_port not in self.nat_entrante:
+            connection_data = self.nat_entrante.get(public_dst_port)
+            if connection_data is None:
                 return
             # Recuperamos la IP y puerto originales
             # del host privado que inició la conexión
-            original_ip, original_port, original_in_port = self.nat_entrante[
-                public_dst_port
-            ]
+            (
+                original_in_port,
+                _protocol,
+                original_ip,
+                original_port,
+                _dstip,
+                _dstport,
+            ) = connection_data
 
             private_dst_mac = self.arp_table.get(original_ip)
             if private_dst_mac is None:
