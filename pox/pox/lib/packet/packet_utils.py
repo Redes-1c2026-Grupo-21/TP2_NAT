@@ -28,104 +28,104 @@ _ethtype_to_str = {}
 _ipproto_to_str = {}
 
 # Map ethernet type to string
-_ethtype_to_str[0x0800] = 'IP'
-_ethtype_to_str[0x0806] = 'ARP'
-_ethtype_to_str[0x8035] = 'RARP'
-_ethtype_to_str[0x8100] = 'VLAN'
-_ethtype_to_str[0x88cc] = 'LLDP'
-_ethtype_to_str[0x888e] = 'PAE'
-_ethtype_to_str[0x8847] = 'MPLS'
-_ethtype_to_str[0x8848] = 'MPLS_MC' # Multicast
-_ethtype_to_str[0x86dd] = 'IPV6'
-_ethtype_to_str[0x880b] = 'PPP'
-_ethtype_to_str[0x88bb] = 'LWAPP'
-_ethtype_to_str[0x880c] = 'GSMP'
-_ethtype_to_str[0x8137] = 'IPX'
-_ethtype_to_str[0x0842] = 'WOL' # Wake On LAN
-_ethtype_to_str[0x22f3] = 'TRILL'
-_ethtype_to_str[0x8870] = 'JUMBO'
-_ethtype_to_str[0x889a] = 'SCSI' # SCSI Over Ethernet
-_ethtype_to_str[0x88a2] = 'ATA' # ATA Over Ethernet
-_ethtype_to_str[0x9100] = 'QINQ'
-_ethtype_to_str[0xffff] = 'BAD'
+_ethtype_to_str[0x0800] = "IP"
+_ethtype_to_str[0x0806] = "ARP"
+_ethtype_to_str[0x8035] = "RARP"
+_ethtype_to_str[0x8100] = "VLAN"
+_ethtype_to_str[0x88CC] = "LLDP"
+_ethtype_to_str[0x888E] = "PAE"
+_ethtype_to_str[0x8847] = "MPLS"
+_ethtype_to_str[0x8848] = "MPLS_MC"  # Multicast
+_ethtype_to_str[0x86DD] = "IPV6"
+_ethtype_to_str[0x880B] = "PPP"
+_ethtype_to_str[0x88BB] = "LWAPP"
+_ethtype_to_str[0x880C] = "GSMP"
+_ethtype_to_str[0x8137] = "IPX"
+_ethtype_to_str[0x0842] = "WOL"  # Wake On LAN
+_ethtype_to_str[0x22F3] = "TRILL"
+_ethtype_to_str[0x8870] = "JUMBO"
+_ethtype_to_str[0x889A] = "SCSI"  # SCSI Over Ethernet
+_ethtype_to_str[0x88A2] = "ATA"  # ATA Over Ethernet
+_ethtype_to_str[0x9100] = "QINQ"
+_ethtype_to_str[0xFFFF] = "BAD"
 
 
 # IP protocol to string
-#TODO: This should probably be integrated with the decorator used in
+# TODO: This should probably be integrated with the decorator used in
 #      the ipv6 module.
-_ipproto_to_str[0]  = 'HOP_OPTS'
-_ipproto_to_str[1]  = 'ICMP'
-_ipproto_to_str[2]  = 'IGMP'
-_ipproto_to_str[4]  = 'IPIP'
-_ipproto_to_str[6]  = 'TCP'
-_ipproto_to_str[9]  = 'IGRP'
-_ipproto_to_str[17] = 'UDP'
-_ipproto_to_str[43] = 'IPV6_ROUTING'
-_ipproto_to_str[44] = 'IPV6_FRAG'
-_ipproto_to_str[47] = 'GRE'
-_ipproto_to_str[58] = 'ICMP6'
-_ipproto_to_str[59] = 'IPV6_NO_NEXT'
-_ipproto_to_str[60] = 'DEST_OPTS'
-_ipproto_to_str[89] = 'OSPF'
+_ipproto_to_str[0] = "HOP_OPTS"
+_ipproto_to_str[1] = "ICMP"
+_ipproto_to_str[2] = "IGMP"
+_ipproto_to_str[4] = "IPIP"
+_ipproto_to_str[6] = "TCP"
+_ipproto_to_str[9] = "IGRP"
+_ipproto_to_str[17] = "UDP"
+_ipproto_to_str[43] = "IPV6_ROUTING"
+_ipproto_to_str[44] = "IPV6_FRAG"
+_ipproto_to_str[47] = "GRE"
+_ipproto_to_str[58] = "ICMP6"
+_ipproto_to_str[59] = "IPV6_NO_NEXT"
+_ipproto_to_str[60] = "DEST_OPTS"
+_ipproto_to_str[89] = "OSPF"
 
 
-class MalformedException (RuntimeError):
-  pass
+class MalformedException(RuntimeError):
+    pass
 
 
-class TruncatedException (RuntimeError):
-  pass
+class TruncatedException(RuntimeError):
+    pass
 
 
-def checksum (data, start = 0, skip_word = None):
-  """
-  Calculate standard internet checksum over data starting at start'th byte
+def checksum(data, start=0, skip_word=None):
+    """
+    Calculate standard internet checksum over data starting at start'th byte
 
-  skip_word: If specified, it's the word offset of a word in data to "skip"
-             (as if it were zero).  The purpose is when data is received
-             data which contains a computed checksum that you are trying to
-             verify -- you want to skip that word since it was zero when
-             the checksum was initially calculated.
-  """
-  if len(data) % 2 != 0:
-    arr = array.array('H', data[:-1])
-  else:
-    arr = array.array('H', data)
+    skip_word: If specified, it's the word offset of a word in data to "skip"
+               (as if it were zero).  The purpose is when data is received
+               data which contains a computed checksum that you are trying to
+               verify -- you want to skip that word since it was zero when
+               the checksum was initially calculated.
+    """
+    if len(data) % 2 != 0:
+        arr = array.array("H", data[:-1])
+    else:
+        arr = array.array("H", data)
 
-  if skip_word is not None:
-    for i in range(0, len(arr)):
-      if i == skip_word:
-        continue
-      start +=  arr[i]
-  else:
-    for i in range(0, len(arr)):
-      start +=  arr[i]
+    if skip_word is not None:
+        for i in range(0, len(arr)):
+            if i == skip_word:
+                continue
+            start += arr[i]
+    else:
+        for i in range(0, len(arr)):
+            start += arr[i]
 
-  if len(data) % 2 != 0:
-    start += struct.unpack('H', data[-1]+'\0')[0] # Specify order?
+    if len(data) % 2 != 0:
+        start += struct.unpack("H", data[-1:] + b"\0")[0]  # Specify order?
 
-  start  = (start >> 16) + (start & 0xffff)
-  start += (start >> 16)
-  #while start >> 16:
-  #  start = (start >> 16) + (start & 0xffff)
+    start = (start >> 16) + (start & 0xFFFF)
+    start += start >> 16
+    # while start >> 16:
+    #  start = (start >> 16) + (start & 0xffff)
 
-  return ntohs(~start & 0xffff)
-
-
-def ethtype_to_str (t):
-  """
-  Given numeric ethernet type or length, return human-readable representation
-  """
-  if t <= 0x05dc:
-    return "802.3/%04x" % (t,)
-  return _ethtype_to_str.get(t, "%04x" % (t,))
+    return ntohs(~start & 0xFFFF)
 
 
-def ipproto_to_str (t):
-  """
-  Given a numeric IP protocol number (or IPv6 next_header), give human name
-  """
-  if t in _ipproto_to_str:
-    return _ipproto_to_str[t]
-  else:
-    return "%02x" % (t,)
+def ethtype_to_str(t):
+    """
+    Given numeric ethernet type or length, return human-readable representation
+    """
+    if t <= 0x05DC:
+        return "802.3/%04x" % (t,)
+    return _ethtype_to_str.get(t, "%04x" % (t,))
+
+
+def ipproto_to_str(t):
+    """
+    Given a numeric IP protocol number (or IPv6 next_header), give human name
+    """
+    if t in _ipproto_to_str:
+        return _ipproto_to_str[t]
+    else:
+        return "%02x" % (t,)
