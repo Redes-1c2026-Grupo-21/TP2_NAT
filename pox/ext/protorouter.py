@@ -35,13 +35,11 @@ class ProtoRouter(object):
         connection.addListeners(self)
 
         self.arp_table = {}
-        self.packets_pending_arp = {}  # ip -> lista de eventos (paquetes) pendientes
+        self.packets_pending_arp = {}
 
-        self.nat_saliente = {}  # connection_data -> puerto público asignado
-        self.nat_entrante = {}  # puerto público -> connection_data (inverso)
-        self.free_public_ports = set(
-            range(10000, 65536)
-        )  # pool de puertos públicos libres
+        self.nat_saliente = {}
+        self.nat_entrante = {}
+        self.free_public_ports = set(range(10000, 65536))
 
     def _handle_FlowRemoved(self, event):
         port = (
@@ -110,8 +108,7 @@ class ProtoRouter(object):
                     f"MAC de {ip_pkt.dstip} desconocida: encolo el paquete "
                     "y resuelvo por ARP",
                 )
-                # FIX: resolvemos el destino PÚBLICO, con la identidad PÚBLICA,
-                # por el puerto PÚBLICO
+
                 self.queue_pending(
                     ip_pkt.dstip, event, PUBLIC_PORT, PUBLIC_MAC, PUBLIC_IP
                 )
@@ -119,11 +116,6 @@ class ProtoRouter(object):
 
             private_src_port = transport_pkt.srcport
 
-            # Si esta misma conexión ya tenía un puerto público asignado
-            # (p.ej. el flujo expiró por idle_timeout pero la conexión TCP
-            # sigue viva), reusamos el mismo puerto en vez de asignar uno
-            # nuevo: si no, el servidor ve paquetes con un puerto origen
-            # distinto a mitad de conexión y la rechaza (RST).
             connection_data = (
                 in_port,
                 ip_pkt.protocol,
@@ -134,9 +126,9 @@ class ProtoRouter(object):
             )
             allocated_public_port = self.nat_saliente.get(connection_data)
             if allocated_public_port is None:
-                allocated_public_port = (
-                    self.free_public_ports.pop()
-                )  # asignamos un puerto público disponible
+
+                allocated_public_port = self.free_public_ports.pop()
+
                 self.nat_saliente[connection_data] = allocated_public_port
 
             self.nat_entrante[allocated_public_port] = connection_data
@@ -144,6 +136,7 @@ class ProtoRouter(object):
             # Instalar Flujo Saliente
             fm = of.ofp_flow_mod()
             fm.idle_timeout = FLOW_IDLE_TIMEOUT
+
             # usamos el puerto público como cookie para identificar el flujo
             fm.cookie = allocated_public_port
             fm.flags = (
@@ -196,8 +189,6 @@ class ProtoRouter(object):
             connection_data = self.nat_entrante.get(public_dst_port)
             if connection_data is None:
                 return
-            # Recuperamos la IP y puerto originales
-            # del host privado que inició la conexión
             (
                 original_in_port,
                 _protocol,
@@ -222,6 +213,7 @@ class ProtoRouter(object):
             # Instalar Flujo Entrante (para respuesta)
             fm_back = of.ofp_flow_mod()
             fm_back.idle_timeout = FLOW_IDLE_TIMEOUT
+
             # usamos el puerto público como cookie para identificar el flujo
             fm_back.cookie = public_dst_port
             fm_back.flags = (
@@ -276,7 +268,6 @@ class ProtoRouter(object):
             )
 
     def queue_pending(self, ip, event, out_port, mac_address, ip_address):
-        # Si ya hay paquetes esperando esa IP, no repetimos el ARP request.
         is_first = not self.packets_pending_arp.get(ip)
         self.packets_pending_arp.setdefault(ip, []).append(event)
         if is_first:
@@ -299,11 +290,9 @@ class ProtoRouter(object):
         a = arp()
         a.opcode = arp.REPLY
 
-        # El router responde
         a.hwsrc = MAC_ADRESS
         a.protosrc = IP_ADDRESS
 
-        # Datos del host que hizo el request
         a.hwdst = request.hwsrc
         a.protodst = request.protosrc
 
@@ -326,8 +315,6 @@ class ProtoRouter(object):
         self.connection.send(msg)
 
     def send_arp_request(self, target_ip, out_port, MAC_ADRESS, IP_ADDRESS):
-        # FIX: ahora recibe directamente la IP a resolver (target_ip),
-        # en vez de leerla de un objeto "request" que no la tenía.
 
         a = arp()
         a.opcode = arp.REQUEST
@@ -377,10 +364,7 @@ class ProtoRouter(object):
             f"In Port: {in_port}",
         )
 
-        # guardamos ya para la ip cual es su MAC
         self.arp_table[arp_pkt.protosrc] = arp_pkt.hwsrc
-
-        # Si había paquetes esperando que se resuelva esta IP, los reprocesamos ahora.
         self.resolve_pending(arp_pkt.protosrc)
 
         if arp_pkt.opcode == arp.REQUEST:
